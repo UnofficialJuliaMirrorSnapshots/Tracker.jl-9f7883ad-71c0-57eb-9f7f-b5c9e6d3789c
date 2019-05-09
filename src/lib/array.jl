@@ -35,7 +35,7 @@ Base.eltype(x::Type{<:TrackedArray{T}}) where T <: Real = TrackedReal{T}
 
 Base.convert(::Type{T}, x::S) where {T<:TrackedArray,S<:T} = x
 
-Base.convert(::Type{<:TrackedArray}, x::TrackedArray) =
+Base.convert(T::Type{<:TrackedArray}, x::TrackedArray) =
   error("Not implemented: convert $(typeof(x)) to $T")
 
 Base.convert(::Type{<:TrackedArray{T,N,A}}, x::AbstractArray) where {T,N,A} =
@@ -325,9 +325,9 @@ Base.minimum(xs::TrackedArray; dims = :) = track(minimum, xs, dims = dims)
 
 import LinearAlgebra: dot
 
-dot(xs::TrackedVector, ys::TrackedVector) = track(dot, xs, ys)
-dot(xs::AbstractVector, ys::TrackedVector) = track(dot, xs, ys)
-dot(xs::TrackedVector, ys::AbstractVector) = track(dot, xs, ys)
+dot(xs::TrackedArray, ys::TrackedArray) = track(dot, xs, ys)
+dot(xs::AbstractArray, ys::TrackedArray) = track(dot, xs, ys)
+dot(xs::TrackedArray, ys::AbstractArray) = track(dot, xs, ys)
 
 @grad dot(xs, ys) = dot(data(xs), data(ys)), Δ -> (Δ .* ys, Δ .* xs)
 
@@ -385,6 +385,7 @@ x::TrackedVector  * y::TrackedVector  = track(*, x, y)
 
 using NNlib
 import NNlib: softmax, ∇softmax, logsoftmax, ∇logsoftmax, conv, ∇conv_data, depthwiseconv, maxpool, meanpool
+import NNlib: DenseConvDims, DepthwiseConvDims, PoolDims
 
 softmax(xs::TrackedArray) = track(softmax, xs)
 
@@ -394,48 +395,58 @@ logsoftmax(xs::TrackedArray) = track(logsoftmax, xs)
 
 @grad logsoftmax(xs) = logsoftmax(data(xs)), Δ -> (nobacksies(:logsoftmax, ∇logsoftmax(data(Δ), data(xs))),)
 
-depthwiseconv(x::TrackedArray, w::TrackedArray; kw...) = track(depthwiseconv, x, w; kw...)
-depthwiseconv(x::AbstractArray, w::TrackedArray; kw...) = track(depthwiseconv, x, w; kw...)
-depthwiseconv(x::TrackedArray, w::AbstractArray; kw...) = track(depthwiseconv, x, w; kw...)
+depthwiseconv(x::TrackedArray, w::TrackedArray, cdims::DepthwiseConvDims; kw...) = track(depthwiseconv, x, w, cdims; kw...)
+depthwiseconv(x::AbstractArray, w::TrackedArray, cdims::DepthwiseConvDims; kw...) = track(depthwiseconv, x, w, cdims; kw...)
+depthwiseconv(x::TrackedArray, w::AbstractArray, cdims::DepthwiseConvDims; kw...) = track(depthwiseconv, x, w, cdims; kw...)
 
-@grad depthwiseconv(x, w; kw...) =
-  depthwiseconv(data(x), data(w); kw...),
+@grad depthwiseconv(x, w, cdims::DepthwiseConvDims; kw...) =
+  depthwiseconv(data(x), data(w), cdims; kw...),
     Δ -> nobacksies(:depthwiseconv,
-      (NNlib.∇depthwiseconv_data(data.((Δ, x, w))...; kw...),
-       NNlib.∇depthwiseconv_filter(data.((Δ, x, w))...; kw...)))
+      (NNlib.∇depthwiseconv_data(data.((Δ, w))..., cdims; kw...),
+       NNlib.∇depthwiseconv_filter(data.((x, Δ))..., cdims; kw...),
+       nothing))
 
-conv(x::TrackedArray,  w::TrackedArray;  kw...) = track(conv, x, w; kw...)
-conv(x::AbstractArray, w::TrackedArray;  kw...) = track(conv, x, w; kw...)
-conv(x::TrackedArray,  w::AbstractArray; kw...) = track(conv, x, w; kw...)
+conv(x::TrackedArray,  w::TrackedArray, cdims::DenseConvDims;  kw...) = track(conv, x, w, cdims; kw...)
+conv(x::AbstractArray, w::TrackedArray, cdims::DenseConvDims;  kw...) = track(conv, x, w, cdims; kw...)
+conv(x::TrackedArray,  w::AbstractArray, cdims::DenseConvDims; kw...) = track(conv, x, w, cdims; kw...)
 
-@grad conv(x, w; kw...) =
-  conv(data(x), data(w); kw...),
+@grad conv(x, w, cdims::DenseConvDims; kw...) =
+  conv(data(x), data(w), cdims; kw...),
     Δ -> nobacksies(:conv,
-      (NNlib.∇conv_data(data.((Δ, w))...; size=size(x), kw...),
-       NNlib.∇conv_filter(data.((Δ, x))...; size=size(w), kw...)))
+      (NNlib.∇conv_data(data.((Δ, w))..., cdims; kw...),
+       NNlib.∇conv_filter(data.((x, Δ))..., cdims; kw...),
+       nothing))
 
-∇conv_data(x::TrackedArray,  w::TrackedArray;  kw...) = track(∇conv_data, x, w; kw...)
-∇conv_data(x::AbstractArray, w::TrackedArray;  kw...) = track(∇conv_data, x, w; kw...)
-∇conv_data(x::TrackedArray,  w::AbstractArray; kw...) = track(∇conv_data, x, w; kw...)
+∇conv_data(x::TrackedArray,  w::TrackedArray, cdims::DenseConvDims;  kw...) = track(∇conv_data, x, w, cdims; kw...)
+∇conv_data(x::AbstractArray, w::TrackedArray, cdims::DenseConvDims;  kw...) = track(∇conv_data, x, w, cdims; kw...)
+∇conv_data(x::TrackedArray,  w::AbstractArray, cdims::DenseConvDims; kw...) = track(∇conv_data, x, w, cdims; kw...)
 
-@grad ∇conv_data(x, w; kw...) =
-  ∇conv_data(data(x), data(w); kw...),
-    Δ -> nobacksies(:conv,
-      (NNlib.conv(data.((Δ, w))...; size=size(x), kw...),
-       NNlib.∇conv_filter(data.((x, Δ))...; size=size(w), kw...)))
-
-maxpool(x::TrackedArray, k; kw...) = track(maxpool, x, k; kw...)
-
-@grad function maxpool(x, k; kw...)
-  y = maxpool(data(x), k; kw...)
-  y, Δ -> (nobacksies(:maxpool, NNlib.∇maxpool(data.((Δ, y, x))..., k; kw...)), nothing)
+@grad function ∇conv_data(y, w, cdims::DenseConvDims; kw...)
+  return (
+    ∇conv_data(data(y), data(w), cdims; kw...),
+    Δ -> begin
+      return nobacksies(:conv,
+        (NNlib.conv(data.((Δ, w))..., cdims; kw...),
+         NNlib.∇conv_filter(data.((Δ, y))..., cdims; kw...),
+         nothing)
+      )
+    end
+  )
 end
 
-meanpool(x::TrackedArray, k; kw...) = track(meanpool, x, k; kw...)
+maxpool(x::TrackedArray, pdims::PoolDims; kw...) = track(maxpool, x, pdims; kw...)
 
-@grad function meanpool(x, k; kw...)
-  y = meanpool(data(x), k; kw...)
-  y, Δ -> (nobacksies(:maxpool, NNlib.∇meanpool(data.((Δ, y, x))..., k; kw...)), nothing)
+@grad function maxpool(x, pdims::PoolDims; kw...)
+  y = maxpool(data(x), pdims; kw...)
+  y, Δ -> (nobacksies(:maxpool, NNlib.∇maxpool(data.((Δ, y, x))..., pdims; kw...)), nothing)
+end
+
+meanpool(x::TrackedArray, pdims::PoolDims; kw...) = track(meanpool, x, pdims; kw...)
+
+
+@grad function meanpool(x, pdims::PoolDims; kw...)
+  y = meanpool(data(x), pdims; kw...)
+  y, Δ -> (nobacksies(:meanpool, NNlib.∇meanpool(data.((Δ, y, x))..., pdims; kw...)), nothing)
 end
 
 # Broadcasting
@@ -489,7 +500,7 @@ broadcast_rebuild(bc::Broadcasted) =
 
 preprocess(x) = x
 
-function Base.Broadcast.materialize(bc::Broadcasted{TrackedStyle})
+function Base.copy(bc::Broadcasted{TrackedStyle})
   bc1 = Broadcast.flatten(bc)
   bc2 = Broadcast.flatten(broadcast_rebuild(bc))
   ∇broadcast(bc2.f, bc1.args...)
